@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* ── NexusGuard IPS — Global Stiller ─────────────────────────────────────── */
+
+/* Scrollbar özelleştirmesi (WebKit tabanlı tarayıcılar) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #111827;
+}
+::-webkit-scrollbar-thumb {
+  background: #374151;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
+}
+
+/* Metin seçim rengi */
+::selection {
+  background: rgba(34, 211, 238, 0.2);
+  color: #22d3ee;
+}
