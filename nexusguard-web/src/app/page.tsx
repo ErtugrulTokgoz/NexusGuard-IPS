@@ -7,6 +7,7 @@
  * - Anlık istatistik kartları (toplam tehdit, aktif cihaz, taranan URL)
  * - Son tehditler ve son URL taramalarının özet tabloları
  * - Supabase Realtime ile otomatik canlı güncelleme
+ * - İnteraktif Kill-Switch: Kırmızı 'Aktif' butonuna basıldığında Windows Firewall engelini kaldırır
  */
 
 "use client";
@@ -19,6 +20,7 @@ import {
   WifiIcon,
   ClockIcon,
   ArrowPathIcon,
+  CheckCircleIcon,
 } from "@heroicons/react/24/outline";
 
 // ── Alt Bileşen: İstatistik Kartı ─────────────────────────────────────────
@@ -94,7 +96,13 @@ export default function DashboardPage() {
   const [urlScans, setUrlScans] = useState<UrlScan[]>([]);
   const [deviceCount, setDeviceCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [currentTime, setCurrentTime] = useState("");
+
+  // Kill-Switch engel kaldırma butonları için işlem durumları
+  const [unblockingIds, setUnblockingIds] = useState<Record<string, boolean>>({});
+  const [statusNotification, setStatusNotification] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
 
   // ── İlk veri yükleme ─────────────────────────────────────────────────
   const fetchInitialData = useCallback(async () => {
@@ -127,7 +135,7 @@ export default function DashboardPage() {
     fetchInitialData();
     const supabase = createSupabaseClient();
 
-    // Yeni tehdit geldiğinde listeye ekle (en başa)
+    // Yeni tehdit veya güncelleme geldiğinde listeyi güncelle
     const threatSub = supabase
       .channel("dashboard-threats")
       .on(
@@ -135,6 +143,16 @@ export default function DashboardPage() {
         { event: "INSERT", schema: "public", table: "threat_logs" },
         (payload) => {
           setThreats((prev) => [payload.new as ThreatLog, ...prev.slice(0, 4)]);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "threat_logs" },
+        (payload) => {
+          const updated = payload.new as ThreatLog;
+          setThreats((prev) =>
+            prev.map((t) => (t.id === updated.id ? updated : t))
+          );
         }
       )
       .subscribe();
@@ -184,9 +202,83 @@ export default function DashboardPage() {
     }
   };
 
+  // ── Kill-Switch Engelini Kaldır (Firewall API) ─────────────────────────
+  const handleUnblockKillSwitch = async (logId: string, attackerIp: string | null) => {
+    if (unblockingIds[logId]) return;
+
+    const confirmUnblock = window.confirm(
+      `${attackerIp || "Bu cihaz"} için uygulanan Windows Güvenlik Duvarı Kill-Switch engelini kaldırmak istediğinize emin misiniz?`
+    );
+    if (!confirmUnblock) return;
+
+    setUnblockingIds((prev) => ({ ...prev, [logId]: true }));
+    setStatusNotification(null);
+
+    try {
+      const res = await fetch("/api/firewall", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logId, ip: attackerIp }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Engel kaldırma işlemi başarısız.");
+      }
+
+      // Yerel state'i güncelle
+      setThreats((prev) =>
+        prev.map((t) =>
+          t.id === logId
+            ? { ...t, kill_switch_triggered: false, status: "MITIGATED" }
+            : t
+        )
+      );
+
+      setStatusNotification({
+        type: "success",
+        message: data.message || "Güvenlik duvarı engeli başarıyla kaldırıldı.",
+      });
+
+      // 4 saniye sonra bildirimi kaldır
+      setTimeout(() => setStatusNotification(null), 4000);
+    } catch (err: unknown) {
+      console.error("[unblock] Hata:", err);
+      setStatusNotification({
+        type: "error",
+        message: err instanceof Error ? err.message : "İşlem sırasında bir hata oluştu.",
+      });
+    } finally {
+      setUnblockingIds((prev) => ({ ...prev, [logId]: false }));
+    }
+  };
+
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+      {/* ── Bildirim Alanı ── */}
+      {statusNotification && (
+        <div
+          className={`flex items-center justify-between px-4 py-3 rounded-xl border text-sm transition-all ${
+            statusNotification.type === "success"
+              ? "bg-green-500/10 border-green-500/30 text-green-300"
+              : "bg-red-500/10 border-red-500/30 text-red-300"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircleIcon className="w-5 h-5 flex-shrink-0" />
+            <span>{statusNotification.message}</span>
+          </div>
+          <button
+            onClick={() => setStatusNotification(null)}
+            className="text-xs opacity-75 hover:opacity-100 underline ml-4"
+          >
+            Kapat
+          </button>
+        </div>
+      )}
 
       {/* ── Sayfa Başlığı ── */}
       <div>
@@ -217,7 +309,7 @@ export default function DashboardPage() {
           <button
             onClick={handleScan}
             disabled={scanning || !scanUrl.trim()}
-            className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-gray-950 font-semibold rounded-xl text-sm transition-colors flex items-center gap-2"
+            className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-gray-950 font-semibold rounded-xl text-sm transition-colors flex items-center gap-2 cursor-pointer"
           >
             {scanning ? (
               <>
@@ -313,8 +405,13 @@ export default function DashboardPage() {
       {/* ── Son Tehditler Tablosu ── */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-white">Son Tehditler</h2>
-          <span className="text-xs text-gray-600">Canlı güncelleme</span>
+          <div>
+            <h2 className="text-sm font-semibold text-white">Son Tehditler</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Kill-Switch engeli olan cihazların engeli butona tıklanarak kaldırılabilir
+            </p>
+          </div>
+          <span className="text-xs text-gray-500">Canlı güncelleme</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -359,9 +456,29 @@ export default function DashboardPage() {
                     </td>
                     <td className="px-5 py-3">
                       {t.kill_switch_triggered ? (
-                        <span className="text-xs text-red-400 font-medium">● Aktif</span>
+                        <button
+                          onClick={() => handleUnblockKillSwitch(t.id, t.attacker_ip)}
+                          disabled={unblockingIds[t.id]}
+                          title="Windows Güvenlik Duvarı engelini kaldırmak için tıklayın"
+                          className="group inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-500/15 text-red-400 border border-red-500/40 hover:bg-red-500/25 hover:border-red-400 hover:text-red-300 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                        >
+                          {unblockingIds[t.id] ? (
+                            <>
+                              <ArrowPathIcon className="w-3.5 h-3.5 animate-spin text-red-400" />
+                              <span>Kaldırılıyor...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse group-hover:scale-125 transition-transform" />
+                              <span>Aktif (Kaldır)</span>
+                            </>
+                          )}
+                        </button>
                       ) : (
-                        <span className="text-xs text-gray-600">○ Hayır</span>
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs text-gray-400 bg-gray-800/50 border border-gray-700/50">
+                          <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
+                          <span>Pasif</span>
+                        </span>
                       )}
                     </td>
                     <td className="px-5 py-3 text-xs text-gray-500">

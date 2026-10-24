@@ -30,7 +30,10 @@ export default function Navbar() {
 
           {/* ── Logo ── */}
           <Link href="/" className="flex items-center gap-2 group">
-            <ShieldCheckIcon className="w-7 h-7 text-cyan-400 group-hover:text-cyan-300 transition-colors" />
+            <ShieldCheckIcon
+              style={{ width: "28px", height: "28px", minWidth: "28px", minHeight: "28px" }}
+              className="w-7 h-7 text-cyan-400 group-hover:text-cyan-300 transition-colors flex-shrink-0"
+            />
             <span className="font-bold text-lg tracking-tight">
               <span className="text-cyan-400">Nexus</span>
               <span className="text-white">Guard</span>

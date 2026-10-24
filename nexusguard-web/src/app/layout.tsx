@@ -21,6 +21,7 @@ export const metadata: Metadata = {
   title: "NexusGuard IPS | TÜBİTAK 2209-A",
   description: "Gerçek zamanlı ağ izleme ve saldırı önleme sistemi",
   keywords: ["IPS", "network security", "ARP spoofing", "cybersecurity"],
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/web-manifest-combined.json",
+  "name": "NexusGuard IPS",
+  "short_name": "NexusGuard",
+  "description": "Gerçek zamanlı ağ izleme ve saldırı önleme sistemi — TÜBİTAK 2209-A",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#030712",
+  "theme_color": "#22d3ee",
+  "categories": ["security", "utilities"],
+  "lang": "tr",
+  "icons": [
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
