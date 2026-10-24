@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
       ...scanResult.scan_details,
       googleSafeBrowsing: isGoogleThreat ? "TEHDİT ALGILANDI" : "GÜVENLİ",
       googleMatches: googleData.matches || []
-    };
+    } as any;
 
     if (isGoogleThreat) {
       scanResult.risk_score = 100; // Google tehdit bulursa skoru direkt tavan yap
