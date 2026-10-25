@@ -1,19 +1,12 @@
 /**
  * @file src/app/page.tsx
  * @description NexusGuard IPS — Ana Dashboard Sayfası
- *
- * Özellikler:
- * - Büyük URL tarama çubuğu (/api/scan-url'e POST atar)
- * - Anlık istatistik kartları (toplam tehdit, aktif cihaz, taranan URL)
- * - Son tehditler ve son URL taramalarının özet tabloları
- * - Supabase Realtime ile otomatik canlı güncelleme
- * - İnteraktif Kill-Switch: Kırmızı 'Aktif' butonuna basıldığında Windows Firewall engelini kaldırır
  */
 
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { createSupabaseClient, ThreatLog, UrlScan } from "@/lib/supabase";
+import { createSupabaseClient, UrlScan } from "@/lib/supabase";
 import {
   ShieldExclamationIcon,
   MagnifyingGlassIcon,
@@ -23,8 +16,16 @@ import {
   CheckCircleIcon,
 } from "@heroicons/react/24/outline";
 
-// ── Alt Bileşen: İstatistik Kartı ─────────────────────────────────────────
+// Yeni Python motorumuzun gönderdiği veri tipi
+interface NetworkAlert {
+  id: string;
+  created_at: string;
+  target_ip: string;
+  original_mac: string;
+  attacker_mac: string;
+}
 
+// ── Alt Bileşen: İstatistik Kartı ─────────────────────────────────────────
 function StatCard({
   title,
   value,
@@ -64,13 +65,12 @@ function StatCard({
 }
 
 // ── Alt Bileşen: Risk Skoru Rozeti ───────────────────────────────────────
-
 function RiskBadge({ score, verdict }: { score: number; verdict: string }) {
   const color =
     score >= 70
       ? "bg-red-500/10 text-red-400 border-red-500/30"
-      : score >= 25
-      ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/30"
+      ? score >= 25
+      : "bg-yellow-500/10 text-yellow-400 border-yellow-500/30"
       : "bg-green-500/10 text-green-400 border-green-500/30";
 
   return (
@@ -81,7 +81,6 @@ function RiskBadge({ score, verdict }: { score: number; verdict: string }) {
 }
 
 // ── Ana Sayfa Bileşeni ────────────────────────────────────────────────────
-
 export default function DashboardPage() {
   const [scanUrl, setScanUrl] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -92,25 +91,18 @@ export default function DashboardPage() {
   }>(null);
   const [scanError, setScanError] = useState<string | null>(null);
 
-  const [threats, setThreats] = useState<ThreatLog[]>([]);
+  const [alerts, setAlerts] = useState<NetworkAlert[]>([]);
   const [urlScans, setUrlScans] = useState<UrlScan[]>([]);
   const [deviceCount, setDeviceCount] = useState(0);
   const [loading, setLoading] = useState(true);
-
-  // Kill-Switch engel kaldırma butonları için işlem durumları
-  const [unblockingIds, setUnblockingIds] = useState<Record<string, boolean>>({});
-  const [statusNotification, setStatusNotification] = useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
 
   // ── İlk veri yükleme ─────────────────────────────────────────────────
   const fetchInitialData = useCallback(async () => {
     const supabase = createSupabaseClient();
 
-    const [threatRes, scanRes, deviceRes] = await Promise.all([
+    const [alertRes, scanRes, deviceRes] = await Promise.all([
       supabase
-        .from("threat_logs")
+        .from("network_alerts")
         .select("*")
         .order("created_at", { ascending: false })
         .limit(5),
@@ -124,7 +116,7 @@ export default function DashboardPage() {
         .select("id", { count: "exact", head: true }),
     ]);
 
-    if (threatRes.data) setThreats(threatRes.data);
+    if (alertRes.data) setAlerts(alertRes.data);
     if (scanRes.data) setUrlScans(scanRes.data);
     if (deviceRes.count !== null) setDeviceCount(deviceRes.count);
     setLoading(false);
@@ -135,24 +127,14 @@ export default function DashboardPage() {
     fetchInitialData();
     const supabase = createSupabaseClient();
 
-    // Yeni tehdit veya güncelleme geldiğinde listeyi güncelle
-    const threatSub = supabase
-      .channel("dashboard-threats")
+    // Yeni ARP Zehirlenmesi uyarısı geldiğinde listeyi güncelle
+    const alertSub = supabase
+      .channel("dashboard-alerts")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "threat_logs" },
+        { event: "INSERT", schema: "public", table: "network_alerts" },
         (payload) => {
-          setThreats((prev) => [payload.new as ThreatLog, ...prev.slice(0, 4)]);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "threat_logs" },
-        (payload) => {
-          const updated = payload.new as ThreatLog;
-          setThreats((prev) =>
-            prev.map((t) => (t.id === updated.id ? updated : t))
-          );
+          setAlerts((prev) => [payload.new as NetworkAlert, ...prev.slice(0, 4)]);
         }
       )
       .subscribe();
@@ -170,7 +152,7 @@ export default function DashboardPage() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(threatSub);
+      supabase.removeChannel(alertSub);
       supabase.removeChannel(scanSub);
     };
   }, [fetchInitialData]);
@@ -202,87 +184,12 @@ export default function DashboardPage() {
     }
   };
 
-  // ── Kill-Switch Engelini Kaldır (Firewall API) ─────────────────────────
-  const handleUnblockKillSwitch = async (logId: string, attackerIp: string | null) => {
-    if (unblockingIds[logId]) return;
-
-    const confirmUnblock = window.confirm(
-      `${attackerIp || "Bu cihaz"} için uygulanan Windows Güvenlik Duvarı Kill-Switch engelini kaldırmak istediğinize emin misiniz?`
-    );
-    if (!confirmUnblock) return;
-
-    setUnblockingIds((prev) => ({ ...prev, [logId]: true }));
-    setStatusNotification(null);
-
-    try {
-      const res = await fetch("/api/firewall", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logId, ip: attackerIp }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Engel kaldırma işlemi başarısız.");
-      }
-
-      // Yerel state'i güncelle
-      setThreats((prev) =>
-        prev.map((t) =>
-          t.id === logId
-            ? { ...t, kill_switch_triggered: false, status: "MITIGATED" }
-            : t
-        )
-      );
-
-      setStatusNotification({
-        type: "success",
-        message: data.message || "Güvenlik duvarı engeli başarıyla kaldırıldı.",
-      });
-
-      // 4 saniye sonra bildirimi kaldır
-      setTimeout(() => setStatusNotification(null), 4000);
-    } catch (err: unknown) {
-      console.error("[unblock] Hata:", err);
-      setStatusNotification({
-        type: "error",
-        message: err instanceof Error ? err.message : "İşlem sırasında bir hata oluştu.",
-      });
-    } finally {
-      setUnblockingIds((prev) => ({ ...prev, [logId]: false }));
-    }
-  };
-
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-
-      {/* ── Bildirim Alanı ── */}
-      {statusNotification && (
-        <div
-          className={`flex items-center justify-between px-4 py-3 rounded-xl border text-sm transition-all ${
-            statusNotification.type === "success"
-              ? "bg-green-500/10 border-green-500/30 text-green-300"
-              : "bg-red-500/10 border-red-500/30 text-red-300"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <CheckCircleIcon className="w-5 h-5 flex-shrink-0" />
-            <span>{statusNotification.message}</span>
-          </div>
-          <button
-            onClick={() => setStatusNotification(null)}
-            className="text-xs opacity-75 hover:opacity-100 underline ml-4"
-          >
-            Kapat
-          </button>
-        </div>
-      )}
-
       {/* ── Sayfa Başlığı ── */}
       <div>
-        <h1 className="text-2xl font-bold text-white">Güvenlik Dashboard&apos;u</h1>
+        <h1 className="text-2xl font-bold text-white">Güvenlik Dashboard'u</h1>
         <p className="text-sm text-gray-500 mt-1">
           Ağınızdaki tehditleri gerçek zamanlı olarak izleyin
         </p>
@@ -373,9 +280,9 @@ export default function DashboardPage() {
       {/* ── İstatistik Kartları ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="Toplam Tehdit"
-          value={loading ? "—" : threats.length}
-          subtitle="Son 5 kayıt"
+          title="Son Alarmlar"
+          value={loading ? "—" : alerts.length}
+          subtitle="Ağ izleme devrede"
           icon={ShieldExclamationIcon}
           color="red"
         />
@@ -394,7 +301,7 @@ export default function DashboardPage() {
           color="green"
         />
         <StatCard
-          title="Son Güncelleme"
+          title="Sistem Durumu"
           value={loading ? "—" : "Canlı"}
           subtitle="Realtime aktif"
           icon={ClockIcon}
@@ -402,26 +309,29 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* ── Son Tehditler Tablosu ── */}
+      {/* ── Son Tehditler Tablosu (Supabase Realtime) ── */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-white">Son Tehditler</h2>
+            <h2 className="text-sm font-semibold text-white">Ağ Güvenliği (IDS) Logları</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              Kill-Switch engeli olan cihazların engeli butona tıklanarak kaldırılabilir
+              Python motoru tarafından yakalanan ARP Zehirlenmesi (MITM) tespitleri
             </p>
           </div>
-          <span className="text-xs text-gray-500">Canlı güncelleme</span>
+          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+            Aktif İzleme
+          </span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
-                <th className="px-5 py-3 text-left">Tür</th>
-                <th className="px-5 py-3 text-left">Saldırgan IP</th>
+                <th className="px-5 py-3 text-left">Tehdit Türü</th>
                 <th className="px-5 py-3 text-left">Hedef IP</th>
-                <th className="px-5 py-3 text-left">Kill-Switch</th>
-                <th className="px-5 py-3 text-left">Tarih</th>
+                <th className="px-5 py-3 text-left">Orijinal MAC</th>
+                <th className="px-5 py-3 text-left">Saldırgan MAC</th>
+                <th className="px-5 py-3 text-left">Tespit Zamanı</th>
               </tr>
             </thead>
             <tbody>
@@ -431,58 +341,34 @@ export default function DashboardPage() {
                     Yükleniyor...
                   </td>
                 </tr>
-              ) : threats.length === 0 ? (
+              ) : alerts.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-gray-600">
-                    Henüz tehdit kaydı yok — Python motoru bağlanınca görünecek
+                  <td colSpan={5} className="px-5 py-8 text-center text-gray-500">
+                    Henüz tehdit kaydı yok — Python motoru ağınızı güvenle izliyor.
                   </td>
                 </tr>
               ) : (
-                threats.map((t) => (
+                alerts.map((a) => (
                   <tr
-                    key={t.id}
+                    key={a.id}
                     className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
                   >
                     <td className="px-5 py-3">
                       <span className="px-2 py-1 rounded text-xs font-mono font-medium bg-red-500/10 text-red-400 border border-red-500/20">
-                        {t.threat_type}
+                        ARP_SPOOFING
                       </span>
                     </td>
                     <td className="px-5 py-3 font-mono text-xs text-gray-300">
-                      {t.attacker_ip ?? "—"}
+                      {a.target_ip}
                     </td>
-                    <td className="px-5 py-3 font-mono text-xs text-gray-300">
-                      {t.victim_ip ?? "—"}
+                    <td className="px-5 py-3 font-mono text-xs text-gray-400">
+                      {a.original_mac}
                     </td>
-                    <td className="px-5 py-3">
-                      {t.kill_switch_triggered ? (
-                        <button
-                          onClick={() => handleUnblockKillSwitch(t.id, t.attacker_ip)}
-                          disabled={unblockingIds[t.id]}
-                          title="Windows Güvenlik Duvarı engelini kaldırmak için tıklayın"
-                          className="group inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-500/15 text-red-400 border border-red-500/40 hover:bg-red-500/25 hover:border-red-400 hover:text-red-300 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                        >
-                          {unblockingIds[t.id] ? (
-                            <>
-                              <ArrowPathIcon className="w-3.5 h-3.5 animate-spin text-red-400" />
-                              <span>Kaldırılıyor...</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse group-hover:scale-125 transition-transform" />
-                              <span>Aktif (Kaldır)</span>
-                            </>
-                          )}
-                        </button>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs text-gray-400 bg-gray-800/50 border border-gray-700/50">
-                          <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
-                          <span>Pasif</span>
-                        </span>
-                      )}
+                    <td className="px-5 py-3 font-mono text-xs text-red-400">
+                      {a.attacker_mac}
                     </td>
                     <td className="px-5 py-3 text-xs text-gray-500">
-                      {new Date(t.created_at).toLocaleString("tr-TR")}
+                      {new Date(a.created_at).toLocaleString("tr-TR")}
                     </td>
                   </tr>
                 ))
