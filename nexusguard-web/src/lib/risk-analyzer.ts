@@ -1,15 +1,10 @@
 /**
  * @file risk-analyzer.ts
- * @description Puppeteer tabanlı URL risk analiz motoru.
- *
- * Tarama adımları:
- *  1. Puppeteer ile URL'yi izole headless tarayıcıda aç
- *  2. Yönlendirme zincirini, başlıkları ve form varlığını kontrol et
- *  3. Oltalama anahtar kelimelerini tara
- *  4. Oluşan risk puanını 0-100 skalasında döndür
- *
- * Kurulum: npm install puppeteer (zaten kuruldu)
+ * @description Puppeteer tabanlı URL risk analiz motoru (Vercel Uyumlu).
  */
+
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 
 /** Tarama sonuç tipi */
 export interface ScanResult {
@@ -66,17 +61,13 @@ export async function analyzeUrl(targetUrl: string): Promise<ScanResult> {
 
   let browser;
   try {
-    // Puppeteer'i dynamic import ile yükle (Node.js runtime)
-    const puppeteer = await import("puppeteer");
-    browser = await puppeteer.default.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-extensions",
-        "--disable-plugins",
-      ],
+    // Vercel Serverless ortamına uygun Chromium başlatma
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+      ignoreHTTPSErrors: true,
     });
 
     const page = await browser.newPage();
