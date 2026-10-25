@@ -1,10 +1,15 @@
+import os
 import time
+from dotenv import load_dotenv
 from scapy.all import sniff, ARP
 from supabase import create_client, Client
 from win11toast import toast
 
-SUPABASE_URL = "https://zfjuivwfndrqaaqoxofn.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmanVpdndmbmRycWFhcW94b2ZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3NzM1ODcsImV4cCI6MjEwODM0OTU4N30.ChGKrv3CSiDduky7cuVXi3OIes3xBYWBb3cTL20a3VE"
+# Gizli .env dosyasından anahtarları yükle
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 ip_mac_map = {}
