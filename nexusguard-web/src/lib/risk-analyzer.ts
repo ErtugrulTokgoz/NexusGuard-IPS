@@ -64,11 +64,10 @@ export async function analyzeUrl(targetUrl: string): Promise<ScanResult> {
     // Vercel Serverless ortamına uygun Chromium başlatma
     browser = await puppeteer.launch({
       args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
       executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
+      headless: true,
       ignoreHTTPSErrors: true,
-    });
+    } as any);
 
     const page = await browser.newPage();
 
